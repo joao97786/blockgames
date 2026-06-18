@@ -1,0 +1,319 @@
+```html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Block Games - Compartilhado</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .page { display: none; }
+        .page.active { display: flex; flex-direction: column; min-height: 100vh; }
+        .game-card:hover { transform: translateY(-5px); transition: all 0.3s ease; }
+    </style>
+    
+    <!-- Firebase SDKs para o Banco Compartilhado -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        let unsubscribeGames = null;
+        const SENHA_EXCLUSAO = "Al131210@";
+
+        // Autenticação obrigatória antes de carregar dados
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Erro na autenticação de segurança:", error);
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                const savedUser = localStorage.getItem('userName');
+                if (savedUser) {
+                    window.userName = savedUser;
+                    document.getElementById('userNameDisplay').innerText = `Olá, ${savedUser}!`;
+                    navegarPara('appPage');
+                    loadSharedGames();
+                } else {
+                    navegarPara('loginPage');
+                }
+            }
+        });
+
+        initAuth();
+
+        // Carrega os jogos em tempo real da nuvem compartilhada
+        function loadSharedGames() {
+            if (!auth.currentUser) return;
+            if (unsubscribeGames) unsubscribeGames();
+
+            // Caminho público compartilhado estruturado conforme a regra
+            const gamesRef = collection(db, 'artifacts', appId, 'public', 'data', 'games');
+            
+            unsubscribeGames = onSnapshot(gamesRef, (snapshot) => {
+                const gamesList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderUI(gamesList);
+            }, (error) => {
+                console.error("Erro ao sincronizar os jogos compartilhados:", error);
+            });
+        }
+
+        // Salvar novo jogo de forma pública
+        window.addGame = async (event) => {
+            event.preventDefault();
+            if (!auth.currentUser) return;
+
+            const title = document.getElementById('title').value;
+            const link = document.getElementById('gameLink').value.startsWith('http') ? document.getElementById('gameLink').value : 'https://' + document.getElementById('gameLink').value;
+            const fileInput = document.getElementById('imgFile');
+            const addedBy = window.userName || 'Anônimo';
+
+            const sendToCloud = async (base64Img) => {
+                try {
+                    const gamesRef = collection(db, 'artifacts', appId, 'public', 'data', 'games');
+                    await addDoc(gamesRef, {
+                        title,
+                        link,
+                        img: base64Img || '',
+                        addedBy,
+                        createdAt: Date.now()
+                    });
+                    document.getElementById('modal').classList.add('hidden');
+                    document.getElementById('addGameForm').reset();
+                } catch (e) {
+                    console.error("Erro ao publicar jogo:", e);
+                }
+            };
+
+            if (fileInput.files && fileInput.files[0]) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    sendToCloud(e.target.result);
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            } else {
+                sendToCloud('');
+            }
+        };
+
+        // Excluir jogo do banco público
+        window.removeGame = async (id) => {
+            if (!auth.currentUser) return;
+            const senha = prompt("Digite a senha de administrador para excluir este jogo de todos os usuários:");
+            if (senha === SENHA_EXCLUSAO) {
+                try {
+                    const gameDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'games', id);
+                    await deleteDoc(gameDocRef);
+                } catch (e) {
+                    console.error("Erro ao deletar jogo:", e);
+                }
+            } else if (senha !== null) {
+                alert("Senha incorreta!");
+            }
+        };
+
+        // Renderiza a interface do catálogo com estatísticas pessoais locais
+        function renderUI(gamesList) {
+            const grid = document.getElementById('gameGrid');
+            grid.innerHTML = '';
+
+            const personalStats = getPersonalStats();
+
+            // Ordena os jogos mais recentes adicionados no topo
+            gamesList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+            gamesList.forEach(game => {
+                const stats = personalStats[game.id] || { hoursPlayed: 0, lastPlayed: null };
+                const card = document.createElement('div');
+                card.className = 'game-card bg-white p-3 rounded-xl shadow-md cursor-pointer hover:shadow-lg transition border border-gray-100 flex flex-col h-full';
+                card.onclick = () => openGame(game);
+                card.innerHTML = `
+                    <div class="relative">
+                        <img src="${game.img || 'https://placehold.co/200x200/gray/white?text=Sem+Imagem'}" class="w-full h-32 object-cover rounded-lg">
+                        <span class="absolute top-2 left-2 bg-indigo-600 text-white text-[10px] px-2 py-0.5 rounded-full font-semibold shadow">
+                            By: ${game.addedBy || 'Anônimo'}
+                        </span>
+                    </div>
+                    <h3 class="font-bold text-md mt-2 truncate text-indigo-950">${game.title}</h3>
+                    <div class="text-xs text-gray-500 mt-1 flex justify-between items-center">
+                        <span>⏱️ ${parseFloat(stats.hoursPlayed).toFixed(1)}h jogadas</span>
+                    </div>
+                    <button onclick="event.stopPropagation(); removeGame('${game.id}')" class="text-red-500 text-xs w-full mt-auto pt-3 text-left hover:underline flex items-center gap-1 justify-center border-t border-gray-50 mt-2">
+                        <i class="fas fa-trash-alt"></i> Excluir
+                    </button>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        // Estatísticas de horas locais por usuário
+        function getPersonalStats() {
+            const key = `gameStats_${window.userName}`;
+            return JSON.parse(localStorage.getItem(key)) || {};
+        }
+
+        function savePersonalStats(stats) {
+            const key = `gameStats_${window.userName}`;
+            localStorage.setItem(key, JSON.stringify(stats));
+        }
+
+        function openGame(game) {
+            const startTime = Date.now();
+            document.getElementById('playModal').classList.remove('hidden');
+            document.getElementById('gameIframe').src = game.link;
+            document.getElementById('modalTitle').innerText = game.title;
+            document.getElementById('externalLink').href = game.link;
+
+            window.closeGame = () => {
+                const endTime = Date.now();
+                const durationHours = (endTime - startTime) / (1000 * 60 * 60);
+
+                const stats = getPersonalStats();
+                if (!stats[game.id]) {
+                    stats[game.id] = { hoursPlayed: 0, lastPlayed: null };
+                }
+                stats[game.id].hoursPlayed = (parseFloat(stats[game.id].hoursPlayed) + durationHours).toFixed(2);
+                stats[game.id].lastPlayed = new Date().toLocaleDateString();
+
+                savePersonalStats(stats);
+                document.getElementById('playModal').classList.add('hidden');
+                document.getElementById('gameIframe').src = '';
+                
+                // Força recarregamento local com novas horas
+                loadSharedGames();
+            };
+        }
+
+        window.realizarLogin = () => {
+            const user = document.getElementById('loginUser').value.trim();
+            if (user) {
+                localStorage.setItem('userName', user);
+                window.userName = user;
+                document.getElementById('userNameDisplay').innerText = `Olá, ${user}!`;
+                navegarPara('appPage');
+                loadSharedGames();
+            } else {
+                alert("Por favor, digite seu nome!");
+            }
+        };
+
+        window.handleLogout = () => {
+            localStorage.removeItem('userName');
+            location.reload();
+        };
+
+        function navegarPara(id) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+    </script>
+</head>
+<body class="bg-indigo-900 font-sans">
+
+    <!-- Página de Login (Apenas Primeira Vez) -->
+    <div id="loginPage" class="page active items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center transform transition-all">
+            <div class="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                <i class="fas fa-gamepad"></i>
+            </div>
+            <h1 class="text-3xl font-bold text-indigo-900 mb-2">Block Games</h1>
+            <p class="text-gray-500 mb-6 text-sm">Seu portal de jogos compartilhados. Digite seu apelido para começar.</p>
+            <input type="text" id="loginUser" placeholder="Nome de Usuário" class="w-full p-3 border rounded-lg mb-4 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <button onclick="realizarLogin()" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition">Entrar</button>
+        </div>
+    </div>
+
+    <!-- Página Principal do Catálogo -->
+    <div id="appPage" class="page bg-gray-50">
+        <nav class="bg-indigo-700 p-4 shadow-lg text-white">
+            <div class="container mx-auto flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <div class="bg-indigo-800 p-2 rounded-lg text-xl">
+                        <i class="fas fa-gamepad"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold">Block Games</h1>
+                        <p id="userNameDisplay" class="text-xs text-indigo-200 font-medium"></p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button onclick="document.getElementById('modal').classList.remove('hidden')" class="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-full font-bold text-xs shadow-md flex items-center gap-1">
+                        <i class="fas fa-plus"></i> Novo Jogo
+                    </button>
+                    <button onclick="handleLogout()" class="text-indigo-200 text-xs hover:text-white transition">
+                        <i class="fas fa-sign-out-alt"></i> Sair
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mx-auto p-4 flex-grow">
+            <div class="mb-4 bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex items-center gap-3 text-indigo-800 text-xs">
+                <i class="fas fa-globe"></i>
+                <span>Todos os jogos adicionados aqui são compartilhados em tempo real com seus amigos! Suas horas jogadas continuam privadas.</span>
+            </div>
+            <div id="gameGrid" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4"></div>
+        </div>
+    </div>
+
+    <!-- Modal para Adicionar Jogos -->
+    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl">
+            <div class="bg-indigo-700 p-4 text-white font-bold flex justify-between items-center">
+                <h2>Adicionar Jogo Compartilhado</h2>
+                <button onclick="document.getElementById('modal').classList.add('hidden')" class="text-indigo-200 hover:text-white">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="addGameForm" class="p-6 space-y-4" onsubmit="addGame(event)">
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Nome do Jogo:</label>
+                    <input type="text" id="title" placeholder="Ex: Block Rush" class="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" required>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Link do Jogo:</label>
+                    <input type="text" id="gameLink" placeholder="Ex: blockrush1.netlify.app" class="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" required>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Capa do Jogo:</label>
+                    <input type="file" id="imgFile" accept="image/*" class="w-full p-2 border rounded-lg text-xs file:mr-4 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                </div>
+                <button type="submit" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 shadow-md">Publicar Jogo</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Player (Iframe do Jogo) -->
+    <div id="playModal" class="fixed inset-0 bg-black hidden flex flex-col z-50">
+        <div class="p-4 bg-gray-950 flex justify-between items-center text-white border-b border-gray-800">
+            <h2 id="modalTitle" class="font-bold text-lg flex items-center gap-2 text-indigo-400"></h2>
+            <div class="flex gap-3">
+                <a id="externalLink" href="#" target="_blank" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1">
+                    <i class="fas fa-external-link-alt"></i> Abrir em Nova Aba
+                </a>
+                <button onclick="closeGame()" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-xs font-bold">
+                    <i class="fas fa-times"></i> Fechar Jogo
+                </button>
+            </div>
+        </div>
+        <iframe id="gameIframe" class="flex-grow w-full border-none bg-white" allowfullscreen></iframe>
+    </div>
+</body>
+</html>
+
+```
