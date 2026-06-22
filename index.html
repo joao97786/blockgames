@@ -105,7 +105,7 @@
                 return;
             }
 
-            const saveProcess = (base64Img, finalLink, extraData = null) => {
+            const saveProcess = (base64Img, finalLink, consoleType = null) => {
                 const newGame = {
                     id: 'game_' + Date.now(),
                     title,
@@ -114,7 +114,8 @@
                     img: base64Img || '',
                     addedBy,
                     createdAt: Date.now(),
-                    isRom: extraData === 'snes'
+                    isRom: consoleType !== null,
+                    consoleCore: consoleType // Salva se é 'snes' ou 'nds'
                 };
                 let localList = JSON.parse(localStorage.getItem('localGames')) || [];
                 if (!Array.isArray(localList)) localList = [];
@@ -128,13 +129,13 @@
                 window.loadGames();
             };
 
-            const processImageAndSave = (finalLink, extraData = null) => {
+            const processImageAndSave = (finalLink, consoleType = null) => {
                 if (fileInput.files && fileInput.files[0]) {
                     compressImage(fileInput.files[0], (compressedBase64) => {
-                        saveProcess(compressedBase64, finalLink, extraData);
+                        saveProcess(compressedBase64, finalLink, consoleType);
                     });
                 } else {
-                    saveProcess('', finalLink, extraData);
+                    saveProcess('', finalLink, consoleType);
                 }
             };
 
@@ -142,9 +143,20 @@
                 const file = romFileInput.files[0];
                 const extension = file.name.split('.').pop().toLowerCase();
 
-                // Aceita agora .sfc, .smc e .zip
-                if (extension === 'sfc' || extension === 'smc' || extension === 'zip') {
-                    showToast(`Carregando arquivo de console (.${extension})...`, "info");
+                // Aceita .sfc, .smc (SNES), .nds (Nintendo DS) e .zip (ambos)
+                if (['sfc', 'smc', 'nds', 'zip'].includes(extension)) {
+                    // Identifica o sistema padrão pela extensão direta (caso não seja zip)
+                    let detectedCore = 'snes';
+                    if (extension === 'nds') {
+                        detectedCore = 'nds';
+                    } else if (extension === 'zip') {
+                        // Se for zip, assume snes por padrão, mas se tiver "nds" no nome do arquivo muda pra nds
+                        if (file.name.toLowerCase().includes('nds')) {
+                            detectedCore = 'nds';
+                        }
+                    }
+
+                    showToast(`Carregando arquivo (${extension.toUpperCase()})...`, "info");
                     const reader = new FileReader();
                     reader.onload = function(e) {
                         const arrayBuffer = e.target.result;
@@ -155,22 +167,20 @@
                             binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
                         }
                         const base64Rom = btoa(binary);
-                        
-                        // Define o MIME-type adequado se for zip ou stream binário padrão
                         const mimeType = extension === 'zip' ? 'application/zip' : 'application/octet-stream';
                         const finalDataUrl = `data:${mimeType};base64,` + base64Rom;
                         
-                        processImageAndSave(finalDataUrl, 'snes');
+                        processImageAndSave(finalDataUrl, detectedCore);
                     };
                     reader.readAsArrayBuffer(file);
                 } else {
-                    showToast("Formato não suportado! Use arquivos .sfc, .smc ou .zip", "error");
+                    showToast("Formato não suportado! Use .sfc, .smc, .nds ou .zip", "error");
                 }
             } else if (link) {
                 if (!link.startsWith('http')) { link = 'https://' + link; }
                 processImageAndSave(link);
             } else {
-                showToast("Insira uma URL ou adicione um arquivo de jogo (.zip, .sfc)!", "warning");
+                showToast("Insira uma URL ou adicione um arquivo de jogo!", "warning");
             }
         };
 
@@ -267,6 +277,7 @@
                 const isFav = favoritesList.includes(gameId);
                 const isNative = game.isNative || gameId.startsWith('game_native');
                 const isRom = game.isRom === true;
+                const coreDisplay = game.consoleCore === 'nds' ? 'NDS' : 'SNES';
                 const stats = personalStats[gameId] || { hoursPlayed: 0, lastPlayed: null };
                 const card = document.createElement('div');
                 
@@ -290,14 +301,14 @@
                     
                     <h3 class="font-bold text-sm mt-3 truncate text-white tracking-wide group-hover:text-indigo-400 transition flex items-center gap-1.5">
                         ${isNative ? '<i class="fas fa-certificate text-indigo-400 text-[11px]" title="Jogo Oficial"></i>' : ''}
-                        ${isRom ? '<i class="fas fa-gamepad text-cyan-400 text-[11px]" title="Jogo de SNES (Aba Externa)"></i>' : ''}
+                        ${isRom ? `<i class="fas fa-gamepad ${game.consoleCore === 'nds' ? 'text-amber-400' : 'text-cyan-400'} text-[11px]" title="Console ${coreDisplay}"></i>` : ''}
                         <span>${game.title}</span>
                     </h3>
                     
                     <div class="text-[11px] text-indigo-200/70 mt-1 flex flex-col gap-0.5">
                         <span class="flex items-center gap-1"><i class="far fa-clock text-[10px]"></i> ${parseFloat(stats.hoursPlayed).toFixed(2)}h jogadas</span>
                         <span class="text-[9px] text-indigo-300/50 flex items-center gap-1">
-                            <i class="far fa-user text-[8px]"></i> Criador: ${game.addedBy || 'Anônimo'}
+                            <i class="far fa-user text-[8px]"></i> Core: ${isRom ? coreDisplay : 'Web'}
                         </span>
                     </div>
 
@@ -330,7 +341,8 @@
 
         function openGame(game) {
             if (game.isRom === true) {
-                showToast("Iniciando console SNES em nova aba...", "success");
+                const targetCore = game.consoleCore || 'snes';
+                showToast(`Iniciando console ${targetCore.toUpperCase()} em nova aba...`, "success");
                 
                 const novaAba = window.open("", "_blank");
                 const codigoEmulador = `<html>
@@ -342,7 +354,7 @@
         <div style="width:100%;height:100%;"><div id="game"></div></div>
         <script>
             EJS_player = "#game";
-            EJS_core = "snes";
+            EJS_core = "${targetCore}";
             EJS_pathtodata = "https://cdn.emulatorjs.org/stable/data/";
             EJS_gameUrl = "${game.link}";
         <\/script>
@@ -488,7 +500,7 @@
             <form id="addGameForm" class="p-6 space-y-4" onsubmit="addGame(event)">
                 <div>
                     <label class="block text-xs font-bold text-indigo-300 mb-1">Nome do Jogo:</label>
-                    <input type="text" id="title" placeholder="Ex: Meu Jogo Favorito" class="w-full p-2.5 bg-slate-950 border border-indigo-950 focus:border-indigo-500 rounded-xl text-xs text-white placeholder-indigo-300/20 focus:outline-none" required>
+                    <input type="text" id="title" placeholder="Ex: Pokémon Black" class="w-full p-2.5 bg-slate-950 border border-indigo-950 focus:border-indigo-500 rounded-xl text-xs text-white placeholder-indigo-300/20 focus:outline-none" required>
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-indigo-300 mb-1">Categoria:</label>
@@ -507,10 +519,10 @@
                 
                 <div class="p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl shadow-inner">
                     <label class="block text-xs font-bold text-cyan-400 mb-1 flex items-center gap-1.5">
-                        <i class="fas fa-gamepad"></i> Carregar seu Jogo (.zip / .sfc / .smc):
+                        <i class="fas fa-gamepad"></i> Carregar seu Jogo (.zip / .sfc / .nds):
                     </label>
-                    <input type="file" id="romGameFile" accept=".sfc,.smc,.zip" class="w-full p-2 bg-slate-950 border border-indigo-950/60 focus:border-indigo-500 rounded-xl text-xs text-indigo-300 file:mr-3 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-semibold file:bg-indigo-600/20 file:text-indigo-400 hover:file:bg-indigo-600/30">
-                    <p class="text-[9px] text-indigo-300/50 mt-1">Selecione uma ROM ou arquivo compactado (.zip) do seu próprio console. O portal executa localmente.</p>
+                    <input type="file" id="romGameFile" accept=".sfc,.smc,.nds,.zip" class="w-full p-2 bg-slate-950 border border-indigo-950/60 focus:border-indigo-500 rounded-xl text-xs text-indigo-300 file:mr-3 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[10px] file:font-semibold file:bg-indigo-600/20 file:text-indigo-400 hover:file:bg-indigo-600/30">
+                    <p class="text-[9px] text-indigo-300/50 mt-1">Aceita SNES (.sfc) e Nintendo DS (.nds). Se for usar arquivo .zip de NDS, certifique-se de que a palavra "nds" esteja no nome do arquivo.</p>
                 </div>
 
                 <div>
